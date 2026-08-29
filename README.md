@@ -10,3 +10,6 @@ Compact Icons starts as framed effect icons only. In **Vertical layout**, its op
 
 **Application effects** only changes a newly applied effect: Critical briefly pulses with a red border and Major gets a short orange glow. Minor effects never animate. Once the 0.9-second effect finishes, all icons return to clean black frames. With this option off, Critical and Major use small red/orange upper-left triangles; Minor has no priority marker.
 
+
+
+<img width="1934" height="813" alt="compare" src="https://github.com/user-attachments/assets/4b4f50e7-45ae-4bdc-a618-08ee227585a6" />

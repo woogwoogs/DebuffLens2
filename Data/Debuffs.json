@@ -140,6 +140,27 @@
     "mergeMode": "LongestDurationThenCharges"
   },
   {
+    "id": "corrupted_blood",
+    "displayName": "Corrupted Blood",
+    "compactName": "CORRUPTED BLOOD",
+    "aliases": ["corrupted_blood"],
+    "description": "Physical damage over time that becomes more dangerous with additional stacks.",
+    "detailedDescription": "Stacking Physical DoT.",
+    "shortDescription": "STACKING PHYSICAL DOT",
+    "priority": "Major",
+    "category": "Ailment",
+    "icon": "",
+    "showTimer": true,
+    "showStacks": true,
+    "showMagnitude": false,
+    "nativeValueMode": "Stacks",
+    "defaultEnabled": true,
+    "defaultSound": false,
+    "defaultInitialAlert": true,
+    "runtimeVerified": true,
+    "mergeMode": "HighestChargesThenDuration"
+  },
+  {
     "id": "poison",
     "displayName": "Poison",
     "compactName": "POISON",
@@ -172,11 +193,12 @@
     "icon": "shock",
     "showTimer": true,
     "showStacks": false,
-    "showMagnitude": false,
+    "showMagnitude": true,
+    "nativeValueMode": "PercentageMagnitude",
     "defaultEnabled": true,
     "defaultSound": false,
     "defaultInitialAlert": true,
-    "runtimeVerified": false,
+    "runtimeVerified": true,
     "mergeMode": "LongestDurationThenCharges"
   },
   {
@@ -192,11 +214,12 @@
     "icon": "chill",
     "showTimer": true,
     "showStacks": false,
-    "showMagnitude": false,
+    "showMagnitude": true,
+    "nativeValueMode": "PercentageMagnitude",
     "defaultEnabled": true,
     "defaultSound": false,
     "defaultInitialAlert": false,
-    "runtimeVerified": false,
+    "runtimeVerified": true,
     "mergeMode": "LongestDurationThenCharges"
   },
   {
@@ -212,11 +235,12 @@
     "icon": "maim",
     "showTimer": true,
     "showStacks": false,
-    "showMagnitude": false,
+    "showMagnitude": true,
+    "nativeValueMode": "IntegerMagnitude",
     "defaultEnabled": true,
     "defaultSound": false,
     "defaultInitialAlert": true,
-    "runtimeVerified": false,
+    "runtimeVerified": true,
     "mergeMode": "LongestDurationThenCharges"
   },
   {
@@ -332,11 +356,12 @@
     "icon": "",
     "showTimer": true,
     "showStacks": false,
-    "showMagnitude": false,
+    "showMagnitude": true,
+    "nativeValueMode": "IntegerMagnitude",
     "defaultEnabled": true,
     "defaultSound": false,
     "defaultInitialAlert": true,
-    "runtimeVerified": false,
+    "runtimeVerified": true,
     "mergeMode": "HighestChargesThenDuration"
   },
   {

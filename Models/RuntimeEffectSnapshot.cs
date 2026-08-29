@@ -20,6 +20,10 @@ internal sealed class ActiveTrackedEffect
     public double MaxTime { get; set; }
     public int Charges { get; set; }
     public int Stacks { get; set; }
+    public bool HasNativeMagnitude { get; set; }
+    public double NativeMagnitude { get; set; }
+    public bool HasNativeStacks { get; set; }
+    public int NativeStacks { get; set; }
     public long AppliedAt { get; set; }
     public List<string> MatchedAliases { get; } = new();
 
@@ -31,6 +35,10 @@ internal sealed class ActiveTrackedEffect
         MaxTime = snapshot.MaxTime;
         Charges = snapshot.Charges;
         Stacks = snapshot.Stacks;
+        HasNativeMagnitude = false;
+        NativeMagnitude = 0;
+        HasNativeStacks = false;
+        NativeStacks = 0;
         AppliedAt = 0;
         MatchedAliases.Clear();
         MatchedAliases.Add(snapshot.InternalName);

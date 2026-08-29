@@ -19,6 +19,15 @@ public enum DebuffMergeMode
     HighestChargesThenDuration,
 }
 
+[JsonConverter(typeof(StringEnumConverter))]
+public enum NativeValueMode
+{
+    None,
+    PercentageMagnitude,
+    IntegerMagnitude,
+    Stacks,
+}
+
 public sealed class DebuffDefinition
 {
     public string Id { get; set; } = string.Empty;
@@ -34,6 +43,7 @@ public sealed class DebuffDefinition
     public bool ShowTimer { get; set; } = true;
     public bool ShowStacks { get; set; }
     public bool ShowMagnitude { get; set; }
+    public NativeValueMode NativeValueMode { get; set; }
     public bool DefaultEnabled { get; set; } = true;
     public bool DefaultSound { get; set; }
     public bool DefaultInitialAlert { get; set; } = true;

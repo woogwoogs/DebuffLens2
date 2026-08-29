@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using DebuffLens2.Models;
 using ExileCore2;
+using ExileCore2.PoEMemory;
 using ExileCore2.PoEMemory.Components;
 using ExileCore2.PoEMemory.MemoryObjects;
 using ImGuiNET;
@@ -33,6 +34,10 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
     private readonly List<RenderLine> _unknownLines = new();
     private readonly List<RenderLine> _buffProbeLines = new();
     private readonly List<RenderLine> _nativeBuffUiProbeLines = new();
+    private readonly List<RenderLine> _nativeBuffPanelLines = new();
+    private readonly List<NativePanelCandidate> _nativeBuffPanelCandidates = new();
+    private readonly List<NativeEffectTileValue> _nativeEffectTileValues = new();
+    private readonly HashSet<int> _usedNativeEffectTileIndices = new();
     private readonly Dictionary<Type, List<MemberInfo>> _buffProbeMembersByType = new();
     private readonly List<RuntimeEffectSnapshot> _activeUnknownEffects = new();
     private readonly List<PillLayout> _pillLayouts = new();
@@ -47,14 +52,19 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
     private readonly HashSet<string> _unknownNamesThisScan = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _unknownNamesLastScan = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, WrappedTextCacheEntry> _wrappedIconDescriptionCache = new(StringComparer.OrdinalIgnoreCase);
+    private Element _cachedNativeBuffPanel;
 
     private long _nextScanAt;
+    private long _nextNativeBuffPanelSearchAt;
+    private long _nativeBuffPanelCacheExpiresAt;
+    private int _nativeBuffPanelTrackedCount = -1;
     private long _lastScanErrorAt;
     private int _snapshotPoolIndex;
     private int _activeEffectPoolIndex;
     private string _lastScanError = string.Empty;
     private string _databaseError = string.Empty;
     private string _lastSoundError = string.Empty;
+    private string _lastNativeBuffPanelLocatorStatus = string.Empty;
     private byte[] _dangerSoundData;
     private byte[] _attentionSoundData;
     private bool _isDragging;
@@ -127,6 +137,7 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
 
         _nextScanAt = now + Settings.Debug.ScanIntervalMilliseconds.Value;
         ScanPlayerEffects();
+        UpdateNativeEffectValues();
     }
 
     public override void Render()
@@ -162,6 +173,13 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
             RebuildNativeBuffUiProbe();
             if (_nativeBuffUiProbeLines.Count > 0)
                 DrawRawPanel(_nativeBuffUiProbeLines, Settings.Debug.NativeBuffUiProbePosition.Value);
+        }
+
+        if (Settings.Debug.ShowNativeBuffPanelScanner.Value)
+        {
+            RebuildNativeBuffPanelScan();
+            if (_nativeBuffPanelLines.Count > 0)
+                DrawRawPanel(_nativeBuffPanelLines, Settings.Debug.NativeBuffPanelPosition.Value);
         }
 
         if (_showDebuffLibrary)
@@ -1034,7 +1052,7 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
         var verticalCellWidth = iconSize;
         var verticalLabelHeight = 0f;
 
-        if (isVertical && Settings.IconsOnly.VerticalDescriptions.Value)
+        if (isVertical && (Settings.IconsOnly.VerticalDescriptions.Value || showIconNames))
         {
             DrawVerticalIconDescriptionHud(position, iconSize, spacing, labelScale);
             return;
@@ -1113,8 +1131,11 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
     private void DrawVerticalIconDescriptionHud(Vector2 position, float iconSize, float spacing, float labelScale)
     {
         var overallScale = Settings.Appearance.OverallScale.Value;
+        var showDescriptions = Settings.IconsOnly.VerticalDescriptions.Value;
         var textGap = Math.Max(8f, 12f * overallScale);
-        var textWidth = Settings.IconsOnly.DescriptionWidth.Value * overallScale;
+        var textWidth = showDescriptions
+            ? Settings.IconsOnly.DescriptionWidth.Value * overallScale
+            : MeasureVerticalNameColumnWidth(labelScale);
         var descriptionScale = Settings.Appearance.FontScale.Value * overallScale * 0.72f;
         var lineGap = Math.Max(1f, 2f * overallScale);
         var blockGap = Math.Max(2f, 5f * overallScale);
@@ -1128,7 +1149,9 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
             var label = Settings.IconsOnly.Labels.Value
                 ? GetEffectiveCompactName(definition).ToUpperInvariant()
                 : string.Empty;
-            var description = GetIconOnlyDescription(definition).ToUpperInvariant();
+            var description = showDescriptions
+                ? GetIconOnlyDescription(definition).ToUpperInvariant()
+                : string.Empty;
             var labelLines = GetWrappedIconText(definition.Id + ":label", label, textWidth, labelScale);
             var descriptionLines = GetWrappedIconText(definition.Id + ":description", description, textWidth, descriptionScale);
             var labelLineHeight = labelLines.Length > 0 ? MeasureTextAtScale("Ag", labelScale).Y : 0f;
@@ -1156,9 +1179,12 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
             {
                 using (Graphics.SetTextScale(labelScale))
                 {
+                    var labelColor = showDescriptions
+                        ? layout.Accent
+                        : GetIconOnlyLabelColor(effect);
                     for (var i = 0; i < labelLines.Length; i++)
                     {
-                        Graphics.DrawText(labelLines[i], new Vector2(textX, textY), layout.Accent);
+                        Graphics.DrawText(labelLines[i], new Vector2(textX, textY), labelColor);
                         textY += labelLineHeight + lineGap;
                     }
                 }
@@ -1199,6 +1225,21 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
             _hudBounds = new RectangleF(position.X, position.Y, rowWidth, maxBottom - position.Y);
     }
 
+    private float MeasureVerticalNameColumnWidth(float labelScale)
+    {
+        var width = 1f;
+        for (var i = 0; i < _visibleEffects.Count; i++)
+        {
+            var label = GetEffectiveCompactName(_visibleEffects[i].Definition).ToUpperInvariant();
+            width = Math.Max(width, MeasureTextAtScale(label, labelScale).X);
+        }
+
+        if (_overflowCount > 0)
+            width = Math.Max(width, MeasureTextAtScale("MORE", labelScale).X);
+
+        return width;
+    }
+
     private void DrawIconOnlyCard(PillLayout layout, float iconSize, float labelScale, float labelGap)
     {
         var bounds = layout.Bounds;
@@ -1213,9 +1254,16 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
                 Graphics.DrawText(
                     layout.Label,
                     new Vector2(bounds.X + (bounds.Width - labelSize.X) / 2f, frameRect.Bottom + labelGap),
-                    WithOpacity(Settings.IconsOnly.LabelColor.Value, 255));
+                    GetIconOnlyLabelColor(layout.Effect));
             }
         }
+    }
+
+    private Color GetIconOnlyLabelColor(ActiveTrackedEffect effect)
+    {
+        return Settings.IconsOnly.ColorLabelsByDebuff.Value
+            ? GetAccentColor(effect.Definition)
+            : WithOpacity(Settings.IconsOnly.LabelColor.Value, 255);
     }
 
     private void DrawIconTile(RectangleF frameRect, ActiveTrackedEffect effect)
@@ -1234,6 +1282,7 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
 
         DrawIconCountdownMask(iconRect, effect);
         DrawIconTimerText(iconRect, effect);
+        DrawNativeValueBadge(iconRect, effect);
 
         Graphics.DrawFrame(frameRect, Color.FromArgb(245, 0, 0, 0), frameThickness);
 
@@ -1317,6 +1366,32 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
         }
     }
 
+    private void DrawNativeValueBadge(RectangleF iconRect, ActiveTrackedEffect effect)
+    {
+        var text = GetNativeValueText(effect);
+        if (string.IsNullOrWhiteSpace(text))
+            return;
+
+        var overallScale = Settings.Appearance.OverallScale.Value;
+        var textScale = Settings.Appearance.FontScale.Value * overallScale * 0.68f;
+        using (Graphics.SetTextScale(textScale))
+        {
+            var textSize = Graphics.MeasureText(text);
+            var horizontalPadding = Math.Max(2f, 3f * overallScale);
+            var verticalPadding = Math.Max(1f, overallScale);
+            var badge = new RectangleF(
+                iconRect.Right - textSize.X - horizontalPadding * 2f,
+                iconRect.Bottom - textSize.Y - verticalPadding * 2f,
+                textSize.X + horizontalPadding * 2f,
+                textSize.Y + verticalPadding * 2f);
+            Graphics.DrawBox(badge.TopLeft, badge.BottomRight, Color.FromArgb(220, 0, 0, 0));
+            Graphics.DrawText(
+                text,
+                new Vector2(badge.X + horizontalPadding, badge.Y + verticalPadding),
+                Settings.IconsOnly.TimerColor.Value);
+        }
+    }
+
     private void DrawIconOnlyOverflow(RectangleF bounds, int overflowCount, float iconSize, string label, float labelScale, float labelGap)
     {
         var accent = GetAccentColorForPriority(DebuffPriority.Minor);
@@ -1357,8 +1432,11 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
         // This is a single WoW-style cooldown mask: no ring, hand, or triangle-fan
         // tick lines. Each section is a solid convex fill; at most four are needed
         // for a full sweep, and the live leading edge remains exact and smooth.
-        var halfWidth = Math.Max(3f, iconRect.Width / 2f - 2f);
-        var halfHeight = Math.Max(3f, iconRect.Height / 2f - 2f);
+        // iconRect already sits inside the clean black frame. Let the mask reach
+        // this complete inner rectangle instead of shrinking it again, so the
+        // countdown visually covers the entire icon face edge-to-edge.
+        var halfWidth = Math.Max(3f, iconRect.Width / 2f);
+        var halfHeight = Math.Max(3f, iconRect.Height / 2f);
         var elapsedColor = Color.FromArgb(178, 0, 0, 0);
         var drawList = ImGui.GetForegroundDrawList();
         var elapsedColorU32 = ToImGuiColor(elapsedColor);
@@ -1552,15 +1630,26 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
         var timer = GetEffectiveShowTimer(definition) && IsMeaningfulTime(effect.TimeLeft)
             ? FormatSeconds(effect.TimeLeft)
             : string.Empty;
-        var stacks = definition.ShowStacks && effect.Stacks > 1
-            ? "x" + effect.Stacks.ToString(CultureInfo.InvariantCulture)
-            : string.Empty;
+        var stacks = GetNativeValueText(effect);
 
         if (string.IsNullOrWhiteSpace(timer))
             return stacks;
         if (string.IsNullOrWhiteSpace(stacks))
             return timer;
         return timer + " " + stacks;
+    }
+
+    private string GetNativeValueText(ActiveTrackedEffect effect)
+    {
+        if (effect.Definition.ShowStacks && Settings.IconsOnly.Stacks.Value && effect.HasNativeStacks)
+            return "x" + effect.NativeStacks.ToString(CultureInfo.InvariantCulture);
+
+        if (!effect.Definition.ShowMagnitude || !Settings.IconsOnly.Magnitudes.Value || !effect.HasNativeMagnitude)
+            return string.Empty;
+
+        return effect.Definition.NativeValueMode == NativeValueMode.PercentageMagnitude
+            ? Math.Abs(effect.NativeMagnitude).ToString("0.#", CultureInfo.InvariantCulture) + "%"
+            : Math.Abs(effect.NativeMagnitude).ToString("0", CultureInfo.InvariantCulture);
     }
 
     private float GetReservedDetailWidth(ActiveTrackedEffect effect, string detail)
@@ -1859,6 +1948,595 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
                 "NATIVE BUFF UI INSPECTOR | unavailable: " + exception.Message,
                 Color.FromArgb(255, 255, 130, 130)));
         }
+    }
+
+    private void RebuildNativeBuffPanelScan()
+    {
+        _nativeBuffPanelLines.Clear();
+        try
+        {
+            var root = GameController.IngameState?.UIRoot;
+            if (root == null || !root.IsValid)
+            {
+                AddNativeBuffPanelError("UIRoot is unavailable.");
+                return;
+            }
+
+            var panel = GetNativeBuffPanel(root, out var locatorStatus);
+            if (panel == null)
+            {
+                AddNativeBuffPanelError(locatorStatus);
+                return;
+            }
+
+            var tiles = panel.Children;
+            _nativeBuffPanelLines.Add(new RenderLine(
+                $"NATIVE PLAYER-EFFECT PANEL | path={panel.PathFromRoot} children={tiles.Count} | {locatorStatus}",
+                Color.FromArgb(255, 110, 220, 255)));
+            if (_nativeBuffPanelCandidates.Count > 0)
+            {
+                _nativeBuffPanelLines.Add(new RenderLine(
+                    "LOCATOR CANDIDATES | score | children | structural | percentages | timer matches",
+                    Color.FromArgb(255, 255, 196, 88)));
+                for (var i = 0; i < _nativeBuffPanelCandidates.Count; i++)
+                {
+                    var candidate = _nativeBuffPanelCandidates[i];
+                    _nativeBuffPanelLines.Add(new RenderLine(
+                        $"  #{i + 1} {candidate.Element.PathFromRoot} | {candidate.Score} | {candidate.ChildCount} | {candidate.StructuralTiles} | {candidate.PercentageValues} | {candidate.TimerMatches}",
+                        Settings.Debug.RawTextColor.Value));
+                }
+            }
+            _nativeBuffPanelLines.Add(new RenderLine(
+                "Tile | visible | path | timer [0][0] | secondary [1][0] | texture | rect",
+                Color.FromArgb(255, 255, 196, 88)));
+
+            var maximum = Math.Min(Settings.Debug.MaxNativeBuffPanelEffects.Value, tiles.Count);
+            for (var i = 0; i < maximum; i++)
+            {
+                var tile = tiles[i];
+                if (tile == null)
+                {
+                    _nativeBuffPanelLines.Add(new RenderLine($"[{i}] <null>", Settings.Debug.RawTextColor.Value));
+                    continue;
+                }
+
+                var timer = ReadNativeChildText(tile, 0, 0);
+                var secondary = ReadNativeChildText(tile, 1, 0);
+                var texture = NormalizeNativeUiValue(tile.TextureName);
+                var rect = tile.GetClientRect();
+                _nativeBuffPanelLines.Add(new RenderLine(
+                    $"[{i}] {(tile.IsVisible ? "yes" : "no")} | {tile.PathFromRoot} | timer={timer} | value={secondary} | tex={texture} | rect={FormatNativeRect(rect)}",
+                    Settings.Debug.RawTextColor.Value));
+            }
+
+            if (tiles.Count > maximum)
+                _nativeBuffPanelLines.Add(new RenderLine(
+                    $"+{tiles.Count - maximum} more native tiles (raise Max native panel effects)",
+                    Color.FromArgb(255, 170, 170, 170)));
+
+            _nativeBuffPanelLines.Add(new RenderLine(
+                $"TRACKED BUFFSLIST EFFECTS | {_activeEffects.Count}",
+                Color.FromArgb(255, 160, 230, 190)));
+            for (var i = 0; i < _activeEffects.Count; i++)
+            {
+                var effect = _activeEffects[i];
+                var runtimeName = effect.MatchedAliases.Count > 0
+                    ? string.Join(",", effect.MatchedAliases)
+                    : "<none>";
+                var duration = FormatRawDuration(effect.TimeLeft, effect.MaxTime);
+                _nativeBuffPanelLines.Add(new RenderLine(
+                    $"  {effect.Definition.DisplayName} | {runtimeName} | {duration}",
+                    Settings.Debug.RawTextColor.Value));
+            }
+        }
+        catch (Exception exception)
+        {
+            _nativeBuffPanelLines.Clear();
+            AddNativeBuffPanelError(exception.Message);
+        }
+    }
+
+    private void UpdateNativeEffectValues()
+    {
+        var needsNativeValues = false;
+        for (var i = 0; i < _activeEffects.Count; i++)
+        {
+            var effect = _activeEffects[i];
+            effect.HasNativeMagnitude = false;
+            effect.NativeMagnitude = 0;
+            effect.HasNativeStacks = false;
+            effect.NativeStacks = 0;
+            if (effect.Definition.NativeValueMode != NativeValueMode.None)
+                needsNativeValues = true;
+        }
+
+        if (!needsNativeValues)
+            return;
+
+        try
+        {
+            var root = GameController.IngameState?.UIRoot;
+            if (root == null || !root.IsValid)
+                return;
+
+            var panel = GetNativeBuffPanel(root, out _);
+            if (panel == null || !panel.IsValid)
+                return;
+
+            var tiles = panel.Children;
+            _nativeEffectTileValues.Clear();
+            for (var i = 0; i < tiles.Count && i < 30; i++)
+            {
+                var tile = tiles[i];
+                if (tile == null || !tile.IsValid || !tile.IsVisible)
+                    continue;
+
+                var secondaryText = ReadNativeChildText(tile, 1, 0);
+                if (!TryParseNativeSecondaryValue(secondaryText, out var value, out var isPercentage))
+                    continue;
+
+                var timerText = ReadNativeChildText(tile, 0, 0);
+                var hasTimer = TryParseNativeTimerSeconds(timerText, out var timerSeconds);
+                _nativeEffectTileValues.Add(new NativeEffectTileValue(value, isPercentage, hasTimer, timerSeconds));
+            }
+
+            if (_nativeEffectTileValues.Count == 0)
+                return;
+
+            _usedNativeEffectTileIndices.Clear();
+            for (var effectIndex = 0; effectIndex < _activeEffects.Count; effectIndex++)
+            {
+                var effect = _activeEffects[effectIndex];
+                var mode = effect.Definition.NativeValueMode;
+                if (mode == NativeValueMode.None)
+                    continue;
+
+                var matchingTile = FindConfidentNativeValueTile(effect, mode);
+                if (matchingTile < 0)
+                    continue;
+
+                _usedNativeEffectTileIndices.Add(matchingTile);
+                var matchedValue = _nativeEffectTileValues[matchingTile].Value;
+                if (mode == NativeValueMode.Stacks)
+                {
+                    effect.HasNativeStacks = true;
+                    effect.NativeStacks = Math.Max(1, (int)Math.Round(Math.Abs(matchedValue)));
+                }
+                else
+                {
+                    effect.HasNativeMagnitude = true;
+                    effect.NativeMagnitude = Math.Abs(matchedValue);
+                }
+            }
+        }
+        catch
+        {
+            // Native UI values are optional supporting data. BuffsList detection
+            // and the core HUD must remain usable if PoE changes its UI tree.
+        }
+    }
+
+    private int FindConfidentNativeValueTile(
+        ActiveTrackedEffect effect,
+        NativeValueMode mode)
+    {
+        var candidate = -1;
+        var candidateCount = 0;
+        var runtimeHasTimer = IsMeaningfulTime(effect.TimeLeft);
+        for (var i = 0; i < _nativeEffectTileValues.Count; i++)
+        {
+            if (_usedNativeEffectTileIndices.Contains(i) || !NativeTileMatchesMode(_nativeEffectTileValues[i], mode))
+                continue;
+
+            if (runtimeHasTimer &&
+                (!_nativeEffectTileValues[i].HasTimer || Math.Abs(effect.TimeLeft - _nativeEffectTileValues[i].TimerSeconds) > 1.25d))
+                continue;
+
+            candidate = i;
+            candidateCount++;
+        }
+
+        if (candidateCount != 1)
+            return -1;
+
+        if (runtimeHasTimer)
+            return candidate;
+
+        // A persistent effect has no duration with which to prove tile identity.
+        // Accept it only when both sides have exactly one value of this semantic
+        // type. This proves Shock 20% without confusing simultaneous Shock/Chill.
+        var activeModeCount = 0;
+        for (var i = 0; i < _activeEffects.Count; i++)
+        {
+            if (_activeEffects[i].Definition.NativeValueMode == mode)
+                activeModeCount++;
+        }
+
+        return activeModeCount == 1 ? candidate : -1;
+    }
+
+    private static bool NativeTileMatchesMode(NativeEffectTileValue tile, NativeValueMode mode)
+    {
+        return mode == NativeValueMode.PercentageMagnitude
+            ? tile.IsPercentage
+            : !tile.IsPercentage;
+    }
+
+    private static bool TryParseNativeSecondaryValue(string text, out double value, out bool isPercentage)
+    {
+        value = 0;
+        isPercentage = false;
+        if (string.IsNullOrWhiteSpace(text) || text is "<none>" or "<error>")
+            return false;
+
+        text = text.Trim();
+        if (text.EndsWith("%", StringComparison.Ordinal))
+        {
+            isPercentage = true;
+            text = text[..^1];
+        }
+
+        return double.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out value) &&
+               !double.IsNaN(value) &&
+               !double.IsInfinity(value) &&
+               Math.Abs(value) > 0.0001d;
+    }
+
+    private Element GetNativeBuffPanel(Element root, out string status)
+    {
+        var now = Environment.TickCount64;
+        var trackedCount = _activeEffects.Count;
+        if (trackedCount != _nativeBuffPanelTrackedCount)
+        {
+            _cachedNativeBuffPanel = null;
+            _nativeBuffPanelCandidates.Clear();
+            _nextNativeBuffPanelSearchAt = 0;
+            _nativeBuffPanelCacheExpiresAt = 0;
+            _nativeBuffPanelTrackedCount = trackedCount;
+        }
+
+        if (trackedCount == 0)
+        {
+            status = "Waiting for at least one tracked harmful effect before locating the native debuff row.";
+            _lastNativeBuffPanelLocatorStatus = status;
+            return null;
+        }
+
+        if (_cachedNativeBuffPanel != null && _cachedNativeBuffPanel.IsValid && now < _nativeBuffPanelCacheExpiresAt)
+        {
+            status = "short cached match; re-ranked every second";
+            return _cachedNativeBuffPanel;
+        }
+
+        _cachedNativeBuffPanel = null;
+        if (now < _nextNativeBuffPanelSearchAt)
+        {
+            status = string.IsNullOrWhiteSpace(_lastNativeBuffPanelLocatorStatus)
+                ? "No matching panel yet; the bounded search retries once per second."
+                : _lastNativeBuffPanelLocatorStatus;
+            return null;
+        }
+
+        _nextNativeBuffPanelSearchAt = now + 1000;
+
+        const int maximumDepth = 5;
+        const int maximumNodes = 3000;
+        const int maximumChildrenPerNode = 160;
+        var frontier = new List<NativePanelSearchNode> { new(root, 0) };
+        var next = new List<NativePanelSearchNode>();
+        var visited = 0;
+        var best = default(NativePanelCandidate);
+        _nativeBuffPanelCandidates.Clear();
+
+        while (frontier.Count > 0 && visited < maximumNodes)
+        {
+            next.Clear();
+            for (var i = 0; i < frontier.Count && visited < maximumNodes; i++)
+            {
+                var searchNode = frontier[i];
+                var element = searchNode.Element;
+                if (element == null || !element.IsValid)
+                    continue;
+
+                visited++;
+                if (searchNode.Depth > 0)
+                {
+                    var candidate = ScoreNativeBuffPanelCandidate(element, searchNode.Depth);
+                    if (candidate.Element != null)
+                        AddNativePanelCandidate(candidate);
+                    if (candidate.Score > best.Score)
+                        best = candidate;
+                }
+
+                if (searchNode.Depth >= maximumDepth)
+                    continue;
+
+                IList<Element> children;
+                try
+                {
+                    children = element.Children;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                var childMaximum = Math.Min(children.Count, maximumChildrenPerNode);
+                for (var childIndex = 0; childIndex < childMaximum; childIndex++)
+                {
+                    var child = children[childIndex];
+                    if (child != null)
+                        next.Add(new NativePanelSearchNode(child, searchNode.Depth + 1));
+                }
+            }
+
+            var swap = frontier;
+            frontier = next;
+            next = swap;
+        }
+
+        if (best.Element != null && best.Score >= 65)
+        {
+            _cachedNativeBuffPanel = best.Element;
+            _nativeBuffPanelCacheExpiresAt = now + 1000;
+            status = $"dynamic match; score={best.Score}, structural={best.StructuralTiles}, text={best.TextSignals}, searched={visited}";
+            _lastNativeBuffPanelLocatorStatus = status;
+            return best.Element;
+        }
+
+        status = best.Element == null
+            ? $"No panel-shaped candidate found after scanning {visited} UI elements."
+            : $"No confident panel match after scanning {visited} UI elements; best path={best.Element.PathFromRoot}, score={best.Score}, structural={best.StructuralTiles}, text={best.TextSignals}.";
+        _lastNativeBuffPanelLocatorStatus = status;
+        return null;
+    }
+
+    private void AddNativePanelCandidate(NativePanelCandidate candidate)
+    {
+        var insertAt = 0;
+        while (insertAt < _nativeBuffPanelCandidates.Count &&
+               _nativeBuffPanelCandidates[insertAt].Score >= candidate.Score)
+            insertAt++;
+
+        if (insertAt >= 5)
+            return;
+
+        _nativeBuffPanelCandidates.Insert(insertAt, candidate);
+        if (_nativeBuffPanelCandidates.Count > 5)
+            _nativeBuffPanelCandidates.RemoveAt(5);
+    }
+
+    private NativePanelCandidate ScoreNativeBuffPanelCandidate(Element element, int depth)
+    {
+        if (element == null || !element.IsValid)
+            return default;
+
+        IList<Element> children;
+        try
+        {
+            children = element.Children;
+        }
+        catch
+        {
+            return default;
+        }
+
+        if (children.Count == 0 || children.Count > 80)
+            return default;
+
+        var inspected = Math.Min(children.Count, 30);
+        var structuralTiles = 0;
+        var textSignals = 0;
+        var percentageValues = 0;
+        var timerMatches = 0;
+        var visibleTiles = 0;
+        var upperLeftTiles = 0;
+
+        for (var i = 0; i < inspected; i++)
+        {
+            var tile = children[i];
+            if (tile == null || !tile.IsValid)
+                continue;
+
+            Element timerElement;
+            Element valueElement;
+            try
+            {
+                timerElement = tile.GetChildFromIndices(new[] { 0, 0 });
+                valueElement = tile.GetChildFromIndices(new[] { 1, 0 });
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (timerElement == null || !timerElement.IsValid || valueElement == null || !valueElement.IsValid)
+                continue;
+
+            structuralTiles++;
+            try
+            {
+                if (tile.IsVisible)
+                    visibleTiles++;
+            }
+            catch
+            {
+                // A stale candidate tile should not abort the rest of the bounded scan.
+            }
+
+            var timer = ReadElementText(timerElement);
+            var value = ReadElementText(valueElement);
+            if (LooksLikeNativeTimer(timer))
+            {
+                textSignals++;
+                if (TryParseNativeTimerSeconds(timer, out var nativeSeconds) && MatchesTrackedRuntimeTimer(nativeSeconds))
+                    timerMatches++;
+            }
+            if (LooksLikeNativeSecondaryValue(value))
+            {
+                textSignals++;
+                if (value.Trim().EndsWith("%", StringComparison.Ordinal))
+                    percentageValues++;
+            }
+
+            try
+            {
+                var rect = tile.GetClientRect();
+                if (rect.X >= -20 && rect.X <= 650 && rect.Y >= -20 && rect.Y <= 500 &&
+                    rect.Width >= 12 && rect.Width <= 160 && rect.Height >= 12 && rect.Height <= 160)
+                    upperLeftTiles++;
+            }
+            catch
+            {
+                // Position is supporting evidence only.
+            }
+        }
+
+        if (structuralTiles == 0)
+            return default;
+
+        var structuralCoverage = structuralTiles * 100 / inspected;
+        var trackedDifference = Math.Abs(children.Count - _activeEffects.Count);
+        var trackedCountScore = _activeEffects.Count == 0
+            ? 0
+            : trackedDifference switch
+            {
+                0 => 40,
+                1 => 25,
+                2 => 10,
+                _ => -Math.Min(30, trackedDifference * 5),
+            };
+        var score = Math.Min(structuralTiles, 4) * 4 +
+                    Math.Min(textSignals, 8) * 5 +
+                    Math.Min(percentageValues, 4) * 25 +
+                    Math.Min(timerMatches, 4) * 14 +
+                    trackedCountScore +
+                    Math.Min(visibleTiles, 6) * 2 +
+                    Math.Min(upperLeftTiles, 6) * 4;
+        if (structuralCoverage >= 70)
+            score += 20;
+        if (depth <= 4)
+            score += 4;
+
+        return new NativePanelCandidate(
+            element,
+            score,
+            children.Count,
+            structuralTiles,
+            textSignals,
+            percentageValues,
+            timerMatches);
+    }
+
+    private bool MatchesTrackedRuntimeTimer(int nativeSeconds)
+    {
+        for (var i = 0; i < _activeEffects.Count; i++)
+        {
+            var runtimeSeconds = _activeEffects[i].TimeLeft;
+            if (!IsMeaningfulTime(runtimeSeconds))
+                continue;
+
+            if (Math.Abs(runtimeSeconds - nativeSeconds) <= 1.25d)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryParseNativeTimerSeconds(string value, out int seconds)
+    {
+        seconds = 0;
+        if (!LooksLikeNativeTimer(value))
+            return false;
+
+        var separator = value.IndexOf(':');
+        return int.TryParse(value[..separator], NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) &&
+               int.TryParse(value[(separator + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var remainder) &&
+               remainder >= 0 && remainder < 60 &&
+               (seconds = minutes * 60 + remainder) >= 0;
+    }
+
+    private static string ReadElementText(Element element)
+    {
+        try
+        {
+            var text = element.TextNoTags;
+            return string.IsNullOrWhiteSpace(text) ? element.Text : text;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static bool LooksLikeNativeTimer(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var separator = value.IndexOf(':');
+        if (separator <= 0 || separator >= value.Length - 1)
+            return false;
+
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (i == separator)
+                continue;
+            if (!char.IsDigit(value[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool LooksLikeNativeSecondaryValue(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        value = value.Trim();
+        if (value.EndsWith("%", StringComparison.Ordinal))
+            value = value[..^1];
+
+        return double.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out _);
+    }
+
+    private void AddNativeBuffPanelError(string message)
+    {
+        _nativeBuffPanelLines.Add(new RenderLine(
+            "NATIVE PLAYER-EFFECT PANEL | unavailable: " + message,
+            Color.FromArgb(255, 255, 130, 130)));
+    }
+
+    private static string ReadNativeChildText(Element tile, params int[] indices)
+    {
+        try
+        {
+            var element = tile.GetChildFromIndices(indices);
+            if (element == null || !element.IsValid)
+                return "<none>";
+
+            var text = element.TextNoTags;
+            if (string.IsNullOrWhiteSpace(text))
+                text = element.Text;
+            return NormalizeNativeUiValue(text);
+        }
+        catch
+        {
+            return "<error>";
+        }
+    }
+
+    private static string NormalizeNativeUiValue(string value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? "<none>" : value.Replace('|', '/').Trim();
+    }
+
+    private static string FormatNativeRect(RectangleF rect)
+    {
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{rect.X:0},{rect.Y:0},{rect.Width:0},{rect.Height:0}");
     }
 
     private void AddNativeUiTextSweep(object hoveredElement)
@@ -2283,6 +2961,15 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
         _unknownLines.Clear();
         _buffProbeLines.Clear();
         _nativeBuffUiProbeLines.Clear();
+        _nativeBuffPanelLines.Clear();
+        _nativeBuffPanelCandidates.Clear();
+        _nativeEffectTileValues.Clear();
+        _usedNativeEffectTileIndices.Clear();
+        _cachedNativeBuffPanel = null;
+        _nextNativeBuffPanelSearchAt = 0;
+        _nativeBuffPanelCacheExpiresAt = 0;
+        _nativeBuffPanelTrackedCount = -1;
+        _lastNativeBuffPanelLocatorStatus = string.Empty;
         _pillLayouts.Clear();
         _snapshotPoolIndex = 0;
         _activeEffectPoolIndex = 0;
@@ -2411,6 +3098,16 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
     private readonly record struct RenderLine(string Text, Color Color);
     private readonly record struct BuffProbeCandidate(object Buff, RuntimeEffectSnapshot Snapshot, bool IsMapped);
     private readonly record struct NativeUiRelatedElement(string Label, object Element);
+    private readonly record struct NativePanelSearchNode(Element Element, int Depth);
+    private readonly record struct NativePanelCandidate(
+        Element Element,
+        int Score,
+        int ChildCount,
+        int StructuralTiles,
+        int TextSignals,
+        int PercentageValues,
+        int TimerMatches);
+    private readonly record struct NativeEffectTileValue(double Value, bool IsPercentage, bool HasTimer, int TimerSeconds);
     private readonly record struct PillLayout(ActiveTrackedEffect Effect, RectangleF Bounds, string Label, string Detail, string Subtext, Color Accent);
     private sealed record WrappedTextCacheEntry(string Source, float MaxWidth, float TextScale, string[] Lines);
 }

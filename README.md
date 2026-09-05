@@ -3,7 +3,7 @@
 
 Simple plugin to show debuffs anywhere you want and optionally with the name or short description of that debuff
 
-![DebuffLens2 display modes](docs/images/debufflens2-modes.png)
+<img width="1934" height="813" alt="compare" src="https://github.com/user-attachments/assets/fb6bb2c3-d9f4-4f2f-86fd-a6e6eb56a87d" />
 
 From left to right: detailed, compact with names, and icon
 

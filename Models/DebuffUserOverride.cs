@@ -4,7 +4,7 @@ using Newtonsoft.Json.Converters;
 namespace DebuffLens2.Models;
 
 // Kept separate from the shipped definition database so database updates never
-// overwrite a player's HC presentation choices.
+// overwrite a player's presentation choices.
 public sealed class DebuffUserOverride
 {
     public bool? Enabled { get; set; }

@@ -23,11 +23,10 @@ public sealed class DebuffLens2Settings : ISettings
     // These are the persisted settings from earlier builds.  The grouped menu
     // objects below forward to them, so existing config files keep every value.
     [IgnoreMenu]
-    [Menu("Show HUD", "Shows the selected Hardcore HUD only while a tracked harmful effect is active.")]
+    [Menu("Show HUD", "Shows the HUD only while a tracked harmful effect is active.")]
     public ToggleNode ShowMappedDebuffs { get; set; } = new(true);
 
     [IgnoreMenu]
-    [Menu("Display style", "Compact Icons is the smallest combat view. Detailed Icons uses the vertical icon-and-description layout.")]
     public ListNode DisplayStyle { get; set; } = new()
     {
         Value = "Compact Icons",
@@ -37,6 +36,10 @@ public sealed class DebuffLens2Settings : ISettings
             "Detailed Icons"
         }
     };
+
+    // One-time migration marker for the simplified presentation controls.
+    [IgnoreMenu]
+    public ToggleNode SimplifiedDisplaySettings { get; set; } = new(false);
 
     [IgnoreMenu]
     [Menu("New debuff popups", "Briefly enlarges a newly applied tracked effect before it collapses into its normal compact pill. Drowning always shows its emergency warning.")]
@@ -70,7 +73,7 @@ public sealed class DebuffLens2Settings : ISettings
     public ToggleNode EnableSoundAlerts { get; set; } = new(true);
 
     [IgnoreMenu]
-    [Menu("Vertical layout", "Stacks Compact Icons vertically. Descriptions use the vertical icon-and-text layout; Detailed Icons always uses it.")]
+    [Menu("Vertical layout", "Stacks compact icons vertically. Turning on descriptions automatically uses a vertical layout.")]
     public ToggleNode VerticalLayout { get; set; } = new(false);
 
     [IgnoreMenu]
@@ -100,7 +103,7 @@ public sealed class DebuffLens2Settings : ISettings
     public RangeNode<int> PillHeight { get; set; } = new(38, 26, 80);
 
     [JsonIgnore]
-    [Menu("HUD & visibility", "Choose the HUD style and which tracked effects can appear during combat.")]
+    [Menu("HUD & visibility", "Choose which tracked effects can appear during combat.")]
     [Submenu(CollapsedByDefault = false)]
     public HudVisibilitySettings Hud { get; set; }
 
@@ -114,7 +117,7 @@ public sealed class DebuffLens2Settings : ISettings
     [Submenu(CollapsedByDefault = true)]
     public AlertSettings Alerts { get; set; }
 
-    [Menu("Icon display", "Size, names, descriptions, radial dial, timer number, and application effects.")]
+    [Menu("Icon display", "Choose icon size and whether the HUD shows names or full descriptions.")]
     [Submenu(CollapsedByDefault = true)]
     public IconOnlyDisplaySettings IconsOnly { get; set; } = new();
 
@@ -126,7 +129,7 @@ public sealed class DebuffLens2Settings : ISettings
     public Dictionary<string, DebuffUserOverride> DebuffOverrides { get; set; } = new();
 
     [JsonIgnore]
-    [Menu("Open Debuff Library", "Configure individual tracked effects: enabled state, priority, compact name, icon, timer, alert, and sound preference.")]
+    [Menu("Open Debuff Library", "Configure individual built-in effects: enabled state, priority, name, icon, timer, alert, and sound preference.")]
     public ButtonNode OpenDebuffLibrary { get; set; } = new();
 
     [Menu("Debug", "Raw runtime data and unknown-effect discovery tools. Leave these closed during normal play.")]
@@ -143,10 +146,8 @@ public sealed class HudVisibilitySettings
     [JsonIgnore]
     internal DebuffLens2Settings Parent { get; set; }
 
-    [Menu("Show HUD", "Shows the selected Hardcore HUD only while a tracked harmful effect is active.")]
+    [Menu("Show HUD", "Shows the HUD only while a tracked harmful effect is active.")]
     public ToggleNode ShowHud { get => Parent.ShowMappedDebuffs; set => Parent.ShowMappedDebuffs = value; }
-    [Menu("Display style", "Compact Icons is the smallest combat view. Detailed Icons uses the vertical icon-and-description layout.")]
-    public ListNode DisplayStyle { get => Parent.DisplayStyle; set => Parent.DisplayStyle = value; }
     [Menu("Visibility filter", "0 = All tracked; 1 = Critical + Major; 2 = Critical only; 3 = Custom.")]
     public RangeNode<int> VisibilityFilter { get => Parent.VisibilityFilter; set => Parent.VisibilityFilter = value; }
     [Menu("Max visible debuffs", "Critical effects remain visible before lower-priority effects.")]
@@ -162,7 +163,7 @@ public sealed class LayoutSettings
     [JsonIgnore]
     internal DebuffLens2Settings Parent { get; set; }
 
-    [Menu("Vertical layout", "Stacks Compact Icons vertically. Detailed Icons is always vertical.")]
+    [Menu("Vertical layout", "Stacks compact icons vertically. Descriptions always use a vertical layout.")]
     public ToggleNode VerticalLayout { get => Parent.VerticalLayout; set => Parent.VerticalLayout = value; }
     [Menu("Drag overlay", "Drag any displayed effect to move the whole HUD.")]
     public ToggleNode DragOverlay { get => Parent.AllowDragging; set => Parent.AllowDragging = value; }
@@ -189,15 +190,8 @@ public sealed class AlertSettings
 
 public sealed class IconOnlyDisplaySettings
 {
-    public IconOnlyDisplaySettings()
-    {
-        Content = new IconContentSettings { Parent = this };
-        Countdown = new IconCountdownSettings { Parent = this };
-        Values = new IconValueSettings { Parent = this };
-        TextColours = new IconTextColourSettings { Parent = this };
-    }
-
-    // Persisted leaf values; grouped menu sections below forward to them.
+    // Persisted leaf values from earlier builds. The simple public controls
+    // below forward to them so existing sizes and label choices are retained.
     [IgnoreMenu]
     [Menu("Icon size")]
     public RangeNode<int> Size { get; set; } = new(54, 28, 128);
@@ -207,7 +201,6 @@ public sealed class IconOnlyDisplaySettings
     public ToggleNode Labels { get; set; } = new(true);
 
     [IgnoreMenu]
-    [Menu("Color names by debuff", "When descriptions are off, uses each effect's accent colour for its icon label. Leave off for the neutral label style.")]
     public ToggleNode ColorLabelsByDebuff { get; set; } = new(false);
 
     [IgnoreMenu]
@@ -215,7 +208,7 @@ public sealed class IconOnlyDisplaySettings
     public RangeNode<float> LabelScale { get; set; } = new(0.82f, 0.45f, 1.25f);
 
     [IgnoreMenu]
-    [Menu("Show descriptions", "In vertical layout, places the curated combat consequence beside each icon. Long consequences wrap inside a fixed-width text column.")]
+    [Menu("Show descriptions", "Turns on the detailed view with each effect's short consequence beside its icon. Turning this off returns to the compact view.")]
     public ToggleNode VerticalDescriptions { get; set; } = new(true);
 
     [IgnoreMenu]
@@ -223,15 +216,12 @@ public sealed class IconOnlyDisplaySettings
     public RangeNode<int> DescriptionWidth { get; set; } = new(185, 110, 420);
 
     [IgnoreMenu]
-    [Menu("Application effects", "On a new application only: Critical briefly pulses with a red border and Major briefly glows with an orange border. Minor effects never animate. When disabled, icons retain their normal black borders.")]
     public ToggleNode PriorityVisualEffects { get; set; } = new(false);
 
     [IgnoreMenu]
-    [Menu("Show radial dial", "Shows a smooth shaded counter-clockwise cooldown mask inside timed icons. Persistent effects never receive a fake timer.")]
     public ToggleNode CountdownDial { get; set; } = new(true);
 
     [IgnoreMenu]
-    [Menu("Use observed timer when maximum is missing", "When ExileCore2 provides Timer but no MaxTime, uses the highest live Timer observed during the current application as the dial baseline. It is cleared when the effect ends.")]
     public ToggleNode ObservedDurationFallback { get; set; } = new(true);
 
     [IgnoreMenu]
@@ -239,11 +229,9 @@ public sealed class IconOnlyDisplaySettings
     public ToggleNode TimerText { get; set; } = new(true);
 
     [IgnoreMenu]
-    [Menu("Show verified magnitudes", "Shows values such as Shock 20% or Armour Break 770 only when DebuffLens2 can pair PoE's native value with the correct effect confidently.")]
     public ToggleNode Magnitudes { get; set; } = new(true);
 
     [IgnoreMenu]
-    [Menu("Show verified stacks", "Shows a small xN badge for effects whose native secondary value is known to represent stacks, such as Corrupted Blood.")]
     public ToggleNode Stacks { get; set; } = new(true);
 
     [IgnoreMenu]
@@ -257,74 +245,20 @@ public sealed class IconOnlyDisplaySettings
     [IgnoreMenu]
     public ColorNode TimerColor { get; set; } = Color.FromArgb(255, 244, 244, 244);
 
-    [JsonIgnore]
-    [Menu("Content & labels", "Control the icon size, names, and the optional wrapped combat consequence.")]
-    [Submenu(CollapsedByDefault = false)]
-    public IconContentSettings Content { get; set; }
-
-    [JsonIgnore]
-    [Menu("Timer & radial dial", "Choose the countdown dial, timer number, and fallback behaviour for effects with no maximum duration.")]
-    [Submenu(CollapsedByDefault = true)]
-    public IconCountdownSettings Countdown { get; set; }
-
-    [JsonIgnore]
-    [Menu("Values & application effects", "Optional verified magnitude/stack labels and the first-application pulse or glow.")]
-    [Submenu(CollapsedByDefault = true)]
-    public IconValueSettings Values { get; set; }
-
-    [JsonIgnore]
-    [Menu("Text colours", "Fine-tune the neutral label, description, and timer colours.")]
-    [Submenu(CollapsedByDefault = true)]
-    public IconTextColourSettings TextColours { get; set; }
-}
-
-public sealed class IconContentSettings
-{
-    [JsonIgnore] internal IconOnlyDisplaySettings Parent { get; set; }
     [Menu("Icon size")]
-    public RangeNode<int> IconSize { get => Parent.Size; set => Parent.Size = value; }
+    public RangeNode<int> IconSize { get => Size; set => Size = value; }
     [Menu("Show names")]
-    public ToggleNode ShowNames { get => Parent.Labels; set => Parent.Labels = value; }
-    [Menu("Color names by debuff")]
-    public ToggleNode ColorNamesByDebuff { get => Parent.ColorLabelsByDebuff; set => Parent.ColorLabelsByDebuff = value; }
+    public ToggleNode ShowNames { get => Labels; set => Labels = value; }
     [Menu("Name size")]
-    public RangeNode<float> NameSize { get => Parent.LabelScale; set => Parent.LabelScale = value; }
-    [Menu("Show descriptions")]
-    public ToggleNode ShowDescriptions { get => Parent.VerticalDescriptions; set => Parent.VerticalDescriptions = value; }
+    public RangeNode<float> NameSize { get => LabelScale; set => LabelScale = value; }
+    [Menu("Show descriptions", "Off is the compact view. On is the detailed vertical view with short effect explanations.")]
+    public ToggleNode ShowDescriptions { get => VerticalDescriptions; set => VerticalDescriptions = value; }
     [Menu("Description column width")]
-    public RangeNode<int> DescriptionColumnWidth { get => Parent.DescriptionWidth; set => Parent.DescriptionWidth = value; }
-}
-
-public sealed class IconCountdownSettings
-{
-    [JsonIgnore] internal IconOnlyDisplaySettings Parent { get; set; }
-    [Menu("Show radial dial")]
-    public ToggleNode ShowRadialDial { get => Parent.CountdownDial; set => Parent.CountdownDial = value; }
-    [Menu("Use observed timer when maximum is missing")]
-    public ToggleNode UseObservedTimerWhenMaximumMissing { get => Parent.ObservedDurationFallback; set => Parent.ObservedDurationFallback = value; }
+    public RangeNode<int> DescriptionColumnWidth { get => DescriptionWidth; set => DescriptionWidth = value; }
     [Menu("Show timer number")]
-    public ToggleNode ShowTimerNumber { get => Parent.TimerText; set => Parent.TimerText = value; }
+    public ToggleNode ShowTimerNumber { get => TimerText; set => TimerText = value; }
     [Menu("Timer number size")]
-    public RangeNode<float> TimerNumberSize { get => Parent.TimerTextScale; set => Parent.TimerTextScale = value; }
-}
-
-public sealed class IconValueSettings
-{
-    [JsonIgnore] internal IconOnlyDisplaySettings Parent { get; set; }
-    [Menu("Show verified magnitudes")]
-    public ToggleNode ShowVerifiedMagnitudes { get => Parent.Magnitudes; set => Parent.Magnitudes = value; }
-    [Menu("Show verified stacks")]
-    public ToggleNode ShowVerifiedStacks { get => Parent.Stacks; set => Parent.Stacks = value; }
-    [Menu("Application effects")]
-    public ToggleNode ApplicationEffects { get => Parent.PriorityVisualEffects; set => Parent.PriorityVisualEffects = value; }
-}
-
-public sealed class IconTextColourSettings
-{
-    [JsonIgnore] internal IconOnlyDisplaySettings Parent { get; set; }
-    public ColorNode LabelColor { get => Parent.LabelColor; set => Parent.LabelColor = value; }
-    public ColorNode DescriptionColor { get => Parent.DescriptionColor; set => Parent.DescriptionColor = value; }
-    public ColorNode TimerColor { get => Parent.TimerColor; set => Parent.TimerColor = value; }
+    public RangeNode<float> TimerNumberSize { get => TimerTextScale; set => TimerTextScale = value; }
 }
 
 public sealed class AppearanceSettings
@@ -361,7 +295,7 @@ public sealed class DebugSettings
     [Menu("Show native player-effect panel scanner", "Debug only. Scans every tile in PoE's native top-left player-effect panel and lists its timer and magnitude/stack label beside DebuffLens2's tracked BuffsList effects.")]
     public ToggleNode ShowNativeBuffPanelScanner { get; set; } = new(false);
 
-    [Menu("Show unknown player effects", "Shows only active player effects that are not mapped in DebuffLens2's curated database. This never adds them to the normal HUD.")]
+    [Menu("Show unknown player effects", "Shows only active player effects that are not mapped in DebuffLens2's built-in database. This never adds them to the normal HUD.")]
     public ToggleNode ShowUnknownPlayerEffects { get; set; } = new(false);
 
     [Menu("Log unknown player effects", "Writes new/reapplied unknown runtime effects to UnknownEffects.json for later research. It is deduplicated and never writes every scan.")]

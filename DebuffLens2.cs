@@ -99,20 +99,28 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
 
     private void MigrateLegacyDisplaySettings()
     {
-        // Preserve earlier choices while replacing the retired card HUD with Detailed Icons.
+        // Preserve the visible result of the old style selector once, then use
+        // Show descriptions as the single compact/detailed presentation choice.
         var wasLegacyDetailed =
             (Settings.DetailedMode.Value && !Settings.IconOnlyMode.Value) ||
-            Settings.DisplayStyle.Value == "Detailed Cards";
+            Settings.DisplayStyle.Value == "Detailed Cards" ||
+            Settings.DisplayStyle.Value == "Detailed Icons" ||
+            (Settings.VerticalLayout.Value && Settings.IconsOnly.VerticalDescriptions.Value);
 
-        if (wasLegacyDetailed)
+        if (!Settings.SimplifiedDisplaySettings.Value)
         {
-            Settings.DisplayStyle.Value = "Detailed Icons";
-        }
-        else if (Settings.DisplayStyle.Value != "Detailed Icons")
-        {
-            Settings.DisplayStyle.Value = "Compact Icons";
+            Settings.IconsOnly.VerticalDescriptions.Value = wasLegacyDetailed;
+            Settings.SimplifiedDisplaySettings.Value = true;
         }
 
+        // These are core HUD behaviours now, not configuration choices.
+        Settings.IconsOnly.PriorityVisualEffects.Value = true;
+        Settings.IconsOnly.CountdownDial.Value = true;
+        Settings.IconsOnly.ObservedDurationFallback.Value = true;
+        Settings.IconsOnly.Magnitudes.Value = true;
+        Settings.IconsOnly.Stacks.Value = true;
+        Settings.IconsOnly.ColorLabelsByDebuff.Value = true;
+        Settings.DisplayStyle.Value = "Compact Icons";
         Settings.DetailedMode.Value = false;
         Settings.IconOnlyMode.Value = false;
     }
@@ -241,7 +249,7 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
                 AddDefinition(CreateGeneratedDefinition(record));
             }
 
-            DebugWindow.LogMsg($"DebuffLens2: loaded {_definitions.Count} display definitions and {_definitionByAlias.Count} runtime aliases from curated overrides plus {_knownCatalogIds.Count} RePoE harmful records. Icons load lazily.");
+            DebugWindow.LogMsg($"DebuffLens2: loaded {_definitions.Count} display definitions and {_definitionByAlias.Count} runtime aliases from built-in entries plus {_knownCatalogIds.Count} RePoE harmful records. Icons load lazily.");
         }
         catch (Exception exception)
         {
@@ -916,7 +924,7 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
 
     private void DrawCompactHud(Vector2 position)
     {
-        var detailedIcons = Settings.DisplayStyle.Value == "Detailed Icons";
+        var detailedIcons = Settings.IconsOnly.VerticalDescriptions.Value;
         DrawIconOnlyHud(position, detailedIcons);
     }
 
@@ -1261,9 +1269,7 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
 
     private Color GetIconOnlyLabelColor(ActiveTrackedEffect effect)
     {
-        return Settings.IconsOnly.ColorLabelsByDebuff.Value
-            ? GetAccentColor(effect.Definition)
-            : WithOpacity(Settings.IconsOnly.LabelColor.Value, 255);
+        return GetAccentColor(effect.Definition);
     }
 
     private void DrawIconTile(RectangleF frameRect, ActiveTrackedEffect effect)
@@ -1286,10 +1292,7 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
 
         Graphics.DrawFrame(frameRect, Color.FromArgb(245, 0, 0, 0), frameThickness);
 
-        if (Settings.IconsOnly.PriorityVisualEffects.Value)
-            DrawPriorityApplicationEffect(frameRect, effect, priority, priorityColor);
-        else if (priority != DebuffPriority.Minor)
-            DrawIconPriorityCornerMarker(frameRect, priorityColor);
+        DrawPriorityApplicationEffect(frameRect, effect, priority, priorityColor);
     }
 
     private void DrawIconPriorityCornerMarker(RectangleF frameRect, Color color)
@@ -1420,8 +1423,7 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
 
     private void DrawIconCountdownMask(RectangleF iconRect, ActiveTrackedEffect effect)
     {
-        if (!Settings.IconsOnly.CountdownDial.Value ||
-            !GetEffectiveShowTimer(effect.Definition) ||
+        if (!GetEffectiveShowTimer(effect.Definition) ||
             !TryGetDurationFraction(effect, out var fraction))
             return;
 
@@ -1641,10 +1643,10 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
 
     private string GetNativeValueText(ActiveTrackedEffect effect)
     {
-        if (effect.Definition.ShowStacks && Settings.IconsOnly.Stacks.Value && effect.HasNativeStacks)
+        if (effect.Definition.ShowStacks && effect.HasNativeStacks)
             return "x" + effect.NativeStacks.ToString(CultureInfo.InvariantCulture);
 
-        if (!effect.Definition.ShowMagnitude || !Settings.IconsOnly.Magnitudes.Value || !effect.HasNativeMagnitude)
+        if (!effect.Definition.ShowMagnitude || !effect.HasNativeMagnitude)
             return string.Empty;
 
         return effect.Definition.NativeValueMode == NativeValueMode.PercentageMagnitude
@@ -2746,12 +2748,12 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
         }
 
         _showDebuffLibrary = visible;
-        ImGui.TextUnformatted("These overrides are stored separately from Data/Debuffs.json, so database updates keep your HC choices.");
+        ImGui.TextUnformatted("Your changes are stored separately, so built-in database updates keep your choices.");
         ImGui.TextDisabled("Sound plays once on application; it never repeats while the effect remains active.");
         ImGui.SetNextItemWidth(270f);
         ImGui.InputText("Search", ref _librarySearch, 80);
         ImGui.SameLine();
-        ImGui.Checkbox("Show full RePoE catalog", ref _showGeneratedLibraryEntries);
+        ImGui.Checkbox("Show all known effects", ref _showGeneratedLibraryEntries);
         ImGui.Separator();
 
         ImGui.Columns(2, "DebuffLens2LibraryColumns", true);
@@ -2822,7 +2824,7 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
     {
         var userOverride = GetOrCreateOverride(definition);
         ImGui.TextUnformatted(definition.DisplayName.ToUpperInvariant());
-        var sourceLabel = definition.GeneratedFromRePoe ? "RePoE fallback" : "HC curated";
+        var sourceLabel = definition.GeneratedFromRePoe ? "Full database" : "Built-in";
         ImGui.TextDisabled(sourceLabel + "  |  " + definition.Category + "  |  Runtime aliases: " + string.Join(", ", definition.Aliases));
         ImGui.Separator();
         ImGui.TextDisabled("Combat display");
@@ -2882,7 +2884,7 @@ public sealed class DebuffLens2 : BaseSettingsPlugin<DebuffLens2Settings>
             ? "Exact RePoE source ID; generic Minor presentation"
             : definition.RuntimeVerified
                 ? "Runtime verified"
-                : "Curated candidate - confirm in live BuffsList");
+                : "Built-in candidate - confirm in live BuffsList");
     }
 
     private DebuffUserOverride GetOrCreateOverride(DebuffDefinition definition)
